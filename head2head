@@ -1,0 +1,424 @@
+#!/bin/sh
+#
+# Shen Li N14361265
+#
+# The head2head command can be used to compare objects one pair at a time
+# until a ranking between all objects is obtained using the Condorcet
+# method. The command will store all of its data in a subdirectory of home
+# directory with a specific format.
+#
+# The format of the command is:
+#
+# 	head2head option [args]
+#
+# where option is one of the option names (item, vote, results).Each option
+# will have its own set of arguments that follow the option name.
+#
+# exit status:
+# 0 -- success
+# 1 -- insufficient arguments
+# 2 -- illegal option name
+# 3 -- illegal number of arguments for specific option
+# 4 -- file or directory not exist
+# 5 -- file or directory not readable
+# 6 -- illegal character in category or item
+# 7 -- illegally add new item to other's directory
+# 8 -- item exist in specific category
+# 9 -- insufficient items in specific category
+# 10 - no vote exist
+#
+# NOTICE:
+# before executing the program, add the complete path of script directory to
+# the PATH variable and export it to environment. For example,
+# 	export PATH=$PATH:$PWD
+#
+
+#
+# add a new item to the category
+# $1 -- category id
+# $2 -- item id
+#
+additem() {
+	# before add operation, check whether is me
+	if [ "$username" != "$USER" ]
+	then
+		echo "$0: illegally add new item to user \"$username\" directory" >&2
+		exit 7
+	fi
+	
+	# create items directory to store all item names
+	if [ ! -d "${selfpath}/items" ]
+	then
+		mkdir "${selfpath}/items"
+	fi
+	
+	categoryfile=${selfpath}/items/$1
+	itemid=$2
+	# check whether item id exist in specific catogory file
+	if [ -f "$categoryfile" ] && [ -n "`grep "^$itemid$" "$categoryfile"`" ]
+	then
+		echo "$0: illegal item id \"$itemid\" in category \"$1\" (already exist)" >&2
+		exit 8
+	fi
+	
+	# add item to category
+	echo "$itemid" >> "$categoryfile"
+}
+
+#
+# list items in specific category
+# $1 -- category id
+#
+showitems() {
+	categoryfile=${homepath}/items/$1
+	# check whether category file exist and readable
+	if [ ! -f "$categoryfile" ]
+	then
+		echo "$0: illegal category id \"$1\" in user \"$username\" (not exist)" >&2
+		exit 4
+	elif [ ! -r "$categoryfile" ]
+	then
+		echo "$0: illegal category id \"$1\" in user \"$username\" (not readable)" >&2
+		exit 5
+	fi
+	
+	# show items in category
+	cat < "$categoryfile"
+}
+
+#
+# list the categories
+#
+showcategories() {
+	categoryfolder=${homepath}/items
+	# check whether category folder exist and readable
+	if [ ! -d "$categoryfolder" ]
+	then
+		echo "$0: illegal category folder \"$categoryfolder\" in user \"$username\" (not exist)" >&2
+		exit 4
+	elif [ ! -r "$categoryfolder" ]
+	then
+		echo "$0: illegal category folder \"$categoryfolder\" in user \"$username\" (not readable)" >&2
+		exit 5
+	fi
+	
+	# list all categories
+	ls -1 "$categoryfolder"
+}
+
+#
+# vote for two items
+# $! -- category id
+#
+voteforitems() {
+	categoryfile=${homepath}/items/$1
+	# check whether category id is in the specific user's directory
+	if [ ! -f "$categoryfile" ]
+	then
+		echo "$0: illegal category id \"$1\" in user \"$username\" (not exist)" >&2
+		exit 4
+	elif [ ! -r "$categoryfile" ]
+	then
+		echo "$0: illegal category id \"$1\" in user \"$username\" (not readable)" >&2
+		exit 5
+	fi
+	
+	numberofitems=`wc -l < "$categoryfile"`
+	# check whether there are at least two items in the category
+	if [ $numberofitems -lt 2 ]
+	then
+		echo "$0: insufficient items in category \"$1\" of user \"$username\" (at least two items)" >&2
+		exit 9
+	fi
+	
+	# generate two distinct random numbers
+	date1=`date +%s%N`
+	ran1=`expr $date1 % $numberofitems + 1`
+	date2=`date +%s%N`
+	ran2=`expr $date2 % $numberofitems + 1`
+	while [ $ran1 -eq $ran2 ]
+	do
+		date2=`date +%s%N`
+		ran2=`expr $date2 % $numberofitems + 1`
+	done
+	
+	# generate two random items from category
+	item1=`head -$ran1 < "$categoryfile" | tail -1`
+	item2=`head -$ran2 < "$categoryfile" | tail -1`
+	# start vote
+	stop=0
+	while [ $stop -eq 0 ]
+	do
+		echo "1) $item1"
+		echo "2) $item2"
+		echo "please vote (q for quit): \c"
+		read reply
+		
+		case $reply in
+			"1")
+				stop=1
+				recordvote "$1" "$item1" "$item2"
+				;;
+			"2")
+				stop=1
+				recordvote "$1" "$item2" "$item1"
+				;;
+			q|Q)
+				stop=1
+				;;
+			*)
+				echo "Oops! please vote 1 or 2 (q for quit): "
+				;;
+		esac
+	done
+}
+
+#
+# record vote result
+# $1 -- category id
+# $2 -- winning item
+# $3 -- losing item
+#
+recordvote() {
+	# check whether vote to the specific user's category
+	if [ ! -d "${selfpath}/$username" ]
+	then
+		mkdir "${selfpath}/$username"
+	fi
+	# record vote result
+	echo "$2/$3" >> "${selfpath}/${username}/$1"
+}
+
+#
+# show vote results
+# $1 -- user id
+# $2 -- category id
+#
+showresults() {
+	userpath=`eval echo "~$1/.head2head"`
+	categoryfile=${userpath}/items/$2
+	# check whether category id is in the specific user's deirectory
+	if [ ! -f "$categoryfile" ]
+	then
+		echo "$0: illegal category id \"$2\" in user \"$1\" (not exist)" >&2
+		exit 4
+	elif [ ! -r "$categoryfile" ]
+	then
+		echo "$0: illegal category id \"$2\" in user \"$1\" (not readable)" >&2
+		exit 5
+	fi
+	
+	votefile=${homepath}/$1/$2
+	# then check whether category has as least one vote
+	if [ ! -f "$votefile" ]
+	then
+		echo "$0: illegal category id \"$2\" in user \"$1\" (not vote)" >&2
+		exit 10
+	elif [ ! -r "$votefile" ]
+	then
+		echo "$0: illegal category id \"$2\" in user \"$1\" (not readable)" >&2
+		exit 5
+	fi
+	
+	resulttmpfile=${selfpath}/.resulttmp
+	# calculate vote results, save it in temp file
+	calculateresult "$categoryfile" "$votefile" "$resulttmpfile"
+	# show the vote results
+	cat "$resulttmpfile" | tr '/' ','
+	# remove temp result file
+	rm -rf "$resulttmpfile"
+}
+
+#
+# calculate the vote results, the format is as below
+#	item name/wins/losses/precent wins
+#
+# $1 -- category file
+# $2 -- vote record file
+# $3 -- vote result temp file
+#
+calculateresult() {
+	# caculate vote results
+	awk '
+		BEGIN { FS = "/" }
+		{
+			win[$1]++
+			lose[$2]++
+		}
+		END {
+				for (item in win) {
+					printf("%s%s%d%s%d%s%.2f\n",
+							item, FS,
+							win[item], FS,
+							lose[item], FS,
+							win[item] / (win[item] + lose[item]) * 100)
+					lose[item] = -1
+				}
+				for (item in lose) {
+					if (lose[item] != -1) {
+						printf("%s%s%d%s%d%s%.2f\n",
+								item, FS,
+								win[item], FS,
+								lose[item], FS,
+								win[item] / (win[item] + lose[item]) * 100)
+					}
+				}
+			}
+	' "$2" | sort -t'/' -k4,4nr > "$3"
+	# sorted in order from highest percent to lower precent
+	
+	# append all items that does not have any vote
+	itemnumber=1
+	numberofitems=`wc -l < $1`
+	while [ $itemnumber -le $numberofitems ]
+	do
+		item=`head -$itemnumber < "$1" | tail -1`
+		if [ -z "`cut -d'/' -f1 < "$3" | grep "^$item$"`" ]
+		then
+			echo "$item/0/0/-" >> "$3"
+		fi
+		itemnumber=`expr $itemnumber + 1`
+	done
+}
+
+#
+# check whether arguments are legal
+# arguments can not contain forward slash or newline character
+#
+checkargument() {
+	if [ `echo "$1" | wc -l` -gt 1 ]
+	then
+		echo "$0: illegal argument $2 \"$1\" (cannot contain newline character)" >&2
+		exit 6
+	elif [ -n "`echo "$1" | grep '/'`" ]
+	then
+		echo "$0: illegal argument $2 \"$1\" (cannot contain forward slash)" >&2
+		exit 6
+	fi
+}
+
+# check whether the option name is exist
+if [ $# -lt 1 ]
+then
+cat << ERROREND >&2
+$0: insufficient arguments
+	Usage: $0 option [args]
+	where option is one of the option names (item, vote, results)
+	each option have its own set of arguments that follow the option name
+ERROREND
+	exit 1
+fi
+
+#
+# set umask
+# (the permissions of directory and all files below are world readable
+# besides, the owner is writable to all files and executable to all
+# directories)
+#
+umask 022
+
+username=${HEAD2HEAD_DATA-$USER}
+homepath=`eval echo "~${username}/.head2head"`
+selfpath=`eval echo "~/.head2head"`
+export username
+export homepath
+export selfpath
+
+# create directory ~/.head2head to store all items and votes
+if [ ! -d "$selfpath" ]
+then
+	mkdir "$selfpath"
+fi
+
+# check whether user directory exist and readable
+if [ ! -d "$homepath" ]
+then
+	echo "$0: illegal user \"$username\" directory \"$homepath\" (not exist)" >&2
+	exit 4
+elif [ ! -r "$homepath" ]
+then
+	echo "$0: illegal user \"$username\" directory \"$homepath\" (not readable)" >&2
+	exit 5
+fi
+
+# based on the option name, execute program
+case $1 in
+	# item option name
+	item)
+		if [ $# -eq 3 ]
+		then
+			# check whether category id contains forward slash or newline character
+			checkargument "$2" "category id"
+			# check whether item id contains forward slash or newline character 
+			checkargument "$3" "item id"
+			# add item to specific category
+			additem "$2" "$3"
+		elif [ $# -eq 2 ]
+		then
+			# check whether category id contains forward slash or newlinecharacter
+			checkargument "$2" "category id"
+			# show items in specific category
+			showitems "$2"
+		elif [ $# -eq 1 ]
+		then
+			# show categories
+			showcategories
+		else
+cat << ERROREND >&2
+$0: illegal number of arguments for specific option "$1"
+	Usage: $0 $1 [category_id] [item_id]
+ERROREND
+			exit 3
+		fi
+		;;
+	# vote option name
+	vote)
+		if [ $# -eq 2 ]
+		then
+			# check whether category id contains forward slash or newline character
+			checkargument "$2" "category id"
+			# vote for items in specific category
+			voteforitems "$2"
+		else
+cat << ERROREND >&2
+$0: illegal number of arguments for specific option "$1"
+	Usage: $0 $1 category_id
+ERROREND
+			exit 3
+		fi
+		;;
+	# results option name
+	results)
+		if [ $# -eq 2 ]
+		then
+			# check the argument is either category_id or user_id/category_id
+			if [ -n "`echo "$2" | grep '/'`" ]
+			then
+				userid=`echo "$2" | cut -d'/' -f1`
+				categoryid=`echo "$2" | cut -d'/' -f2-`
+			else
+				userid=$username
+				categoryid=$2
+			fi
+			# check whether category id contains foward slash or newline character
+			checkargument "$categoryid" "category id"
+			# show vote results
+			showresults "$userid" "$categoryid"
+		else
+cat << ERROREND >&2
+$0: illegal number of arguments for specific option "$1"
+	Usage: $0 $1 [user/]category_id
+ERROREND
+			exit 3
+		fi
+		;;
+	# other illegal option names
+	*)
+cat << ERROREND >&2
+$0: illegal option name "$1"
+	Usage: $0 option [args]
+	where option is one of the option names (item, vote, results)
+ERROREND
+		exit 2
+		;;
+esac
